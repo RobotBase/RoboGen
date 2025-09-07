@@ -36,7 +36,3 @@ Thumbs.db
 *.log
 
 templates
-
-# 上传文件
-uploads/
-
