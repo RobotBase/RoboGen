@@ -160,31 +160,44 @@ class RoboGenAPI:
                         chunk.candidates[0].content.parts is None):
                     continue
 
-                # 处理生成的图片
-                if (chunk.candidates[0].content.parts[0].inline_data and
-                        chunk.candidates[0].content.parts[0].inline_data.data):
+                # 遍历所有parts来处理不同类型的内容
+                for part in chunk.candidates[0].content.parts:
+                    # 处理生成的图片
+                    if (hasattr(part, 'inline_data') and part.inline_data and
+                            hasattr(part.inline_data, 'data') and part.inline_data.data):
 
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    file_name = f"generated_step_{file_index}_{timestamp}"
+                        logger.info(f"Found image data in response - MIME type: {part.inline_data.mime_type}")
+                        
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        file_name = f"generated_step_{file_index}_{timestamp}"
 
-                    inline_data = chunk.candidates[0].content.parts[0].inline_data
-                    data_buffer = inline_data.data
-                    file_extension = mimetypes.guess_extension(
-                        inline_data.mime_type)
+                        inline_data = part.inline_data
+                        data_buffer = inline_data.data
+                        file_extension = mimetypes.guess_extension(
+                            inline_data.mime_type)
 
-                    if file_extension:
-                        full_filename = f"{file_name}{file_extension}"
-                        saved_path = self.save_binary_file(
-                            full_filename, data_buffer)
-                        if saved_path:
-                            generated_files.append(saved_path)
+                        if file_extension:
+                            full_filename = f"{file_name}{file_extension}"
+                            saved_path = self.save_binary_file(
+                                full_filename, data_buffer)
+                            if saved_path:
+                                generated_files.append(saved_path)
+                                logger.info(f"Successfully saved image: {saved_path}")
 
-                    file_index += 1
-                else:
+                        file_index += 1
+                    
                     # 处理文本响应
-                    if hasattr(chunk, 'text') and chunk.text:
-                        text_response += chunk.text
+                    elif hasattr(part, 'text') and part.text:
+                        text_response += part.text
+                        logger.debug(f"Added text content: {part.text[:100]}...")
+                
+                # 兼容旧的文本处理方式
+                if hasattr(chunk, 'text') and chunk.text:
+                    text_response += chunk.text
+                    logger.debug(f"Added chunk text: {chunk.text[:100]}...")
 
+            logger.info(f"Generation complete - Text length: {len(text_response)}, Files generated: {len(generated_files)}")
+            
             return {
                 'success': True,
                 'text': text_response,
