@@ -20,9 +20,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# 上传文件
-uploads/
-outputs/
+
 
 # IDE和编辑器
 .vscode/
@@ -38,3 +36,7 @@ Thumbs.db
 *.log
 
 templates
+
+# 上传文件
+uploads/
+

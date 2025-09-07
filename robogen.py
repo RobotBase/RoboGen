@@ -267,6 +267,7 @@ def process_step():
         data = request.get_json()
         step_number = data.get('step')
         image_path = data.get('image_path')
+        robot_type = data.get('robot_type')  # 获取机器人类型
 
         if step_number not in WORKFLOW_STEPS:
             return jsonify({
@@ -276,6 +277,22 @@ def process_step():
 
         step_config = WORKFLOW_STEPS[step_number]
         prompt = step_config['prompt']
+        
+        # 如果有机器人类型信息，在prompt中加入针对性的指导
+        if robot_type:
+            type_mapping = {
+                'quadruped': '四足机器人',
+                'humanoid': '人形机器人',
+                'hexapod': '六足机器人', 
+                'manipulator': '机械臂'
+            }
+            
+            robot_type_name = type_mapping.get(robot_type, robot_type)
+            
+            # 在prompt前添加机器人类型信息
+            prompt = f"注意：这是一个{robot_type_name}类型的机器人。请针对{robot_type_name}的特点进行分析和设计。\n\n{prompt}"
+            
+            logger.info(f"Processing step {step_number} for robot type: {robot_type_name}")
 
         # 调用API生成内容
         result = robogen_api.generate_with_image(prompt, image_path)
