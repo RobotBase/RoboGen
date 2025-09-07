@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 RoboGen Flask Web Application
-基于nanobanana API的机器人设计工作流交互式页面
 """
 
 import os
