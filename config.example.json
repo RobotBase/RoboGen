@@ -1,0 +1,6 @@
+{
+    "_comment": "API 配置示例文件 - 复制此文件为 config.json 并填入你的实际API密钥",
+    "google_api_key": "your_google_api_key_here",
+    "model_name": "gemini-2.5-flash-image-preview",
+    "secret_key": "your_flask_secret_key_here"
+}

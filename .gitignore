@@ -1,0 +1,40 @@
+# 临时文件
+temp/
+
+# API密钥和敏感配置
+*.key
+.env
+.env.local
+config.json
+config.ini
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# 上传文件
+uploads/
+outputs/
+
+# IDE和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+templates
