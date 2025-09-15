@@ -15,6 +15,8 @@ from werkzeug.utils import secure_filename
 from google import genai
 from google.genai import types
 import logging
+from PIL import Image
+import io
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -55,14 +57,40 @@ app.secret_key = config.get("secret_key", "your-secret-key-here")  # 从配置�
 # 配置
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'outputs'
+COMPRESSED_FOLDER = 'compressed'  # 新增压缩图片文件夹
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
 
+# 压缩配置
+COMPRESSION_QUALITY = 75  # JPEG质量，1-100
+MAX_DISPLAY_WIDTH = 600   # 显示图片最大宽度
+MAX_DISPLAY_HEIGHT = 600  # 显示图片最大高度
+
+# 获取脚本目录的绝对路径
+script_dir = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(script_dir, UPLOAD_FOLDER)
+OUTPUT_FOLDER = os.path.join(script_dir, OUTPUT_FOLDER)
+COMPRESSED_FOLDER = os.path.join(script_dir, COMPRESSED_FOLDER)
+
 # 确保文件夹存在
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs(COMPRESSED_FOLDER, exist_ok=True)
+    logger.info(f"Created directories: {UPLOAD_FOLDER}, {OUTPUT_FOLDER}, {COMPRESSED_FOLDER}")
+except Exception as e:
+    logger.error(f"Error creating directories: {e}")
+    # 使用当前目录的相对路径作为备选
+    UPLOAD_FOLDER = './uploads'
+    OUTPUT_FOLDER = './outputs'
+    COMPRESSED_FOLDER = './compressed'
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs(COMPRESSED_FOLDER, exist_ok=True)
+    logger.info(f"Using fallback directories: {UPLOAD_FOLDER}, {OUTPUT_FOLDER}, {COMPRESSED_FOLDER}")
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+app.config['COMPRESSED_FOLDER'] = COMPRESSED_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Google Gemini API配置
@@ -119,6 +147,48 @@ class RoboGenAPI:
             logger.error(f"Error saving file: {e}")
             return None
 
+    def create_compressed_image(self, original_path):
+        """创建压缩版本的图片"""
+        try:
+            # 生成压缩图片的文件名
+            original_filename = os.path.basename(original_path)
+            name, ext = os.path.splitext(original_filename)
+            compressed_filename = f"{name}_compressed.jpg"  # 统一使用jpg格式以获得更好的压缩效果
+            compressed_path = os.path.join(app.config['COMPRESSED_FOLDER'], compressed_filename)
+            
+            # 打开原始图片
+            with Image.open(original_path) as img:
+                # 转换为RGB模式（如果是RGBA等其他模式）
+                if img.mode in ('RGBA', 'LA'):
+                    # 创建白色背景
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'RGBA':
+                        background.paste(img, mask=img.split()[-1])  # 使用alpha通道作为mask
+                    else:
+                        background.paste(img)
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # 计算压缩后的尺寸
+                width, height = img.size
+                if width > MAX_DISPLAY_WIDTH or height > MAX_DISPLAY_HEIGHT:
+                    # 按比例缩放
+                    ratio = min(MAX_DISPLAY_WIDTH / width, MAX_DISPLAY_HEIGHT / height)
+                    new_width = int(width * ratio)
+                    new_height = int(height * ratio)
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # 保存压缩图片
+                img.save(compressed_path, 'JPEG', quality=COMPRESSION_QUALITY, optimize=True)
+                
+            logger.info(f"Compressed image saved to: {compressed_path}")
+            return compressed_path
+            
+        except Exception as e:
+            logger.error(f"Error creating compressed image: {e}")
+            return None
+
     def generate_with_image(self, prompt_text, image_path=None):
         """使用图片和文本生成内容"""
         try:
@@ -147,60 +217,72 @@ class RoboGenAPI:
 
             text_response = ""
             generated_files = []
+            compressed_files = []  # 新增：存储压缩文件路径
             file_index = 0
 
-            for chunk in self.client.models.generate_content_stream(
-                model=self.model_name,
-                contents=contents,
-                config=generate_content_config,
-            ):
-                if (chunk.candidates is None or
-                    chunk.candidates[0].content is None or
-                        chunk.candidates[0].content.parts is None):
-                    continue
+            try:
+                for chunk in self.client.models.generate_content_stream(
+                    model=self.model_name,
+                    contents=contents,
+                    config=generate_content_config,
+                ):
+                    if (chunk.candidates is None or
+                        chunk.candidates[0].content is None or
+                            chunk.candidates[0].content.parts is None):
+                        continue
 
-                # 遍历所有parts来处理不同类型的内容
-                for part in chunk.candidates[0].content.parts:
-                    # 处理生成的图片
-                    if (hasattr(part, 'inline_data') and part.inline_data and
-                            hasattr(part.inline_data, 'data') and part.inline_data.data):
+                    # 遍历所有parts来处理不同类型的内容
+                    for part in chunk.candidates[0].content.parts:
+                        # 处理生成的图片
+                        if (hasattr(part, 'inline_data') and part.inline_data and
+                                hasattr(part.inline_data, 'data') and part.inline_data.data):
 
-                        logger.info(f"Found image data in response - MIME type: {part.inline_data.mime_type}")
+                            logger.info(f"Found image data in response - MIME type: {part.inline_data.mime_type}")
+                            
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            file_name = f"generated_step_{file_index}_{timestamp}"
+
+                            inline_data = part.inline_data
+                            data_buffer = inline_data.data
+                            file_extension = mimetypes.guess_extension(
+                                inline_data.mime_type)
+
+                            if file_extension:
+                                full_filename = f"{file_name}{file_extension}"
+                                saved_path = self.save_binary_file(
+                                    full_filename, data_buffer)
+                                if saved_path:
+                                    generated_files.append(saved_path)
+                                    logger.info(f"Successfully saved image: {saved_path}")
+                                    
+                                    # 创建压缩版本
+                                    compressed_path = self.create_compressed_image(saved_path)
+                                    if compressed_path:
+                                        compressed_files.append(compressed_path)
+                                        logger.info(f"Successfully created compressed image: {compressed_path}")
+
+                            file_index += 1
                         
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        file_name = f"generated_step_{file_index}_{timestamp}"
+                        # 处理文本响应
+                        elif hasattr(part, 'text') and part.text:
+                            text_response += part.text
+                            logger.debug(f"Added text content: {part.text[:100]}...")
 
-                        inline_data = part.inline_data
-                        data_buffer = inline_data.data
-                        file_extension = mimetypes.guess_extension(
-                            inline_data.mime_type)
-
-                        if file_extension:
-                            full_filename = f"{file_name}{file_extension}"
-                            saved_path = self.save_binary_file(
-                                full_filename, data_buffer)
-                            if saved_path:
-                                generated_files.append(saved_path)
-                                logger.info(f"Successfully saved image: {saved_path}")
-
-                        file_index += 1
-                    
-                    # 处理文本响应
-                    elif hasattr(part, 'text') and part.text:
-                        text_response += part.text
-                        logger.debug(f"Added text content: {part.text[:100]}...")
-                
-                # 兼容旧的文本处理方式
-                if hasattr(chunk, 'text') and chunk.text:
-                    text_response += chunk.text
-                    logger.debug(f"Added chunk text: {chunk.text[:100]}...")
+            except Exception as stream_error:
+                logger.error(f"Error during content generation stream: {stream_error}")
+                # 如果有部分成功，仍然返回结果
+                if generated_files:
+                    logger.info(f"Partial success: {len(generated_files)} files generated despite error")
+                else:
+                    raise stream_error
 
             logger.info(f"Generation complete - Text length: {len(text_response)}, Files generated: {len(generated_files)}")
             
             return {
                 'success': True,
                 'text': text_response,
-                'files': generated_files
+                'files': generated_files,
+                'compressed_files': compressed_files  # 新增：返回压缩文件路径
             }
 
         except Exception as e:
@@ -331,5 +413,17 @@ def view_output(filename):
         return "文件不存在", 404
 
 
+@app.route('/view_compressed/<filename>')
+def view_compressed(filename):
+    """查看压缩版本的图片"""
+    try:
+        return send_file(
+            os.path.join(app.config['COMPRESSED_FOLDER'], filename)
+        )
+    except Exception as e:
+        logger.error(f"Error viewing compressed file: {e}")
+        return "文件不存在", 404
+
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=80)
